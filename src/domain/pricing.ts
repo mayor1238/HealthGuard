@@ -73,7 +73,7 @@ export function extendCover(paidThrough: string, daysCovered: number, today: str
 
 export const GRACE_DAYS = 7;
 
-export type CoverStatus = 'active' | 'grace' | 'waiting' | 'lapsed';
+export type CoverStatus = 'active' | 'grace' | 'waiting' | 'lapsed' | 'unpaid';
 
 export interface Eligibility {
   eligible: boolean;
@@ -88,6 +88,16 @@ export function checkEligibility(enrollee: Enrollee, on: string): Eligibility {
   const daysLeft = daysBetween(on, enrollee.paidThrough);
   const waitingEnds = addDays(enrollee.enrolledOn, plan.waitingPeriodDays);
 
+  // Never paid: cover has not started (sponsored members are confirmed at enrolment).
+  if (daysBetween(enrollee.enrolledOn, enrollee.paidThrough) < 0) {
+    return {
+      eligible: false,
+      status: 'unpaid',
+      emergencyOnly: false,
+      daysOfCoverLeft: daysLeft,
+      message: 'Awaiting the first premium payment — cover starts once it is confirmed.',
+    };
+  }
   if (daysLeft < -GRACE_DAYS) {
     return {
       eligible: false,

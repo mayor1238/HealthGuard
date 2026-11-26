@@ -103,9 +103,9 @@ function Overview({ memberId, unconfirmed, navigate }: { memberId: string; uncon
           <div className="idcard-status">Show this card or say your ID at reception. No card? Your phone number works too.</div>
         </div>
         {elig.status !== 'active' && (
-          <Notice tone={elig.status === 'lapsed' ? 'red' : 'amber'}>
+          <Notice tone={elig.status === 'lapsed' || elig.status === 'unpaid' ? 'red' : 'amber'}>
             <AlertTriangle size={16} aria-hidden /> {elig.message}{' '}
-            {(elig.status === 'lapsed' || elig.status === 'grace') && (
+            {(elig.status === 'lapsed' || elig.status === 'grace' || elig.status === 'unpaid') && (
               <a className="link" href="#/member/payments">
                 Pay now
               </a>

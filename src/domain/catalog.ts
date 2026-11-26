@@ -1,4 +1,4 @@
-import type { Benefit, Hmo, Plan, Provider, ServiceCategory, TariffItem } from './types';
+import type { Benefit, ComplaintCategory, Hmo, Plan, Provider, ServiceCategory, TariffItem } from './types';
 
 // Reference data. Organisation names are fictional and used for demonstration only.
 
@@ -164,4 +164,14 @@ export const GROUPS: Record<string, { name: string; discount: number }> = {
   'OSHODI-TRADERS': { name: 'Oshodi Market Traders Association', discount: 0.1 },
   'OKADA-COOP': { name: 'Riders Cooperative Society', discount: 0.1 },
   'TECHHUB-STAFF': { name: 'TechHub Ltd (employer scheme)', discount: 0.15 },
+};
+
+export const COMPLAINT_LABELS: Record<ComplaintCategory, string> = {
+  denied_service: 'Refused treatment',
+  asked_to_pay: 'Asked to pay for covered care',
+  drug_unavailable: 'Drugs not available',
+  long_wait: 'Long waiting time',
+  poor_attitude: 'Poor staff attitude',
+  claim_dispute: 'Visit I did not make',
+  other: 'Other',
 };

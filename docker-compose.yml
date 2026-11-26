@@ -1,0 +1,35 @@
+# Local production-like stack: PostgreSQL + HealthGuard API.
+#   docker compose up --build
+# Secrets below are for local use only — set real ones in your deployment platform.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: healthguard
+      POSTGRES_PASSWORD: healthguard
+      POSTGRES_DB: healthguard
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U healthguard"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://healthguard:healthguard@db:5432/healthguard
+      JWT_SECRET: local-only-change-me-local-only-change-me
+      NIN_HASH_KEY: local-only-nin-key
+      PAYMENT_WEBHOOK_SECRET: local-only-webhook-secret
+      CORS_ORIGINS: http://localhost:5173,http://localhost:4173
+      SEED_DEMO: "true"
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

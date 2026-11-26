@@ -92,6 +92,8 @@ describe('eligibility', () => {
     expect(checkEligibility(enrollee(), TODAY).status).toBe('active');
     expect(checkEligibility(enrollee({ paidThrough: '2026-11-23' }), TODAY).status).toBe('grace');
     expect(checkEligibility(enrollee({ paidThrough: '2026-11-01' }), TODAY).status).toBe('lapsed');
+    const unpaid = checkEligibility(enrollee({ enrolledOn: '2026-11-26', paidThrough: '2026-11-25' }), TODAY);
+    expect(unpaid).toMatchObject({ status: 'unpaid', eligible: false });
     const waiting = checkEligibility(enrollee({ enrolledOn: '2026-11-20' }), TODAY);
     expect(waiting.status).toBe('waiting');
     expect(waiting.emergencyOnly).toBe(true);

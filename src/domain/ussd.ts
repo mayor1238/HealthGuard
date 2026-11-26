@@ -71,7 +71,7 @@ export function ussd(phone: string, text: string, enrollees: Enrollee[], today: 
       if (steps.length === 2)
         return con(`Pay N${quotes[idx].installment.toLocaleString('en-NG')} from your mobile money wallet?\n1. Yes\n2. No`);
       if (steps[2] !== '1') return end('Payment cancelled.');
-      return end(`Payment received. You are covered for ${quotes[idx].daysCovered} more day(s). SMS receipt sent.`, {
+      return end(`Approve the N${quotes[idx].installment.toLocaleString('en-NG')} prompt on your phone. Your cover is extended for ${quotes[idx].daysCovered} day(s) once it is confirmed by SMS.`, {
         type: 'pay',
         enrolleeId: me.id,
         frequency: PAY_OPTIONS[idx],

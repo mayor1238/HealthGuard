@@ -116,6 +116,7 @@ const COVER_TONE: Record<CoverStatus, [Tone, string]> = {
   grace: ['amber', 'Grace period'],
   waiting: ['blue', 'Waiting period'],
   lapsed: ['red', 'Lapsed'],
+  unpaid: ['gray', 'Awaiting first payment'],
 };
 export const CoverBadge = ({ status }: { status: CoverStatus }) => <Badge tone={COVER_TONE[status][0]}>{COVER_TONE[status][1]}</Badge>;
 
@@ -134,14 +135,6 @@ const COMPLAINT_TONE: Record<Complaint['status'], [Tone, string]> = {
 };
 export const ComplaintBadge = ({ c }: { c: Complaint }) => <Badge tone={COMPLAINT_TONE[c.status][0]}>{COMPLAINT_TONE[c.status][1]}</Badge>;
 
-export const COMPLAINT_LABELS: Record<Complaint['category'], string> = {
-  denied_service: 'Refused treatment',
-  asked_to_pay: 'Asked to pay for covered care',
-  drug_unavailable: 'Drugs not available',
-  long_wait: 'Long waiting time',
-  poor_attitude: 'Poor staff attitude',
-  claim_dispute: 'Visit I did not make',
-  other: 'Other',
-};
+export { COMPLAINT_LABELS } from '../domain/catalog';
 
 export const pct = (n: number) => `${Math.round(n * 100)}%`;
