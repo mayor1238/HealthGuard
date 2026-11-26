@@ -1,41 +1,47 @@
-import { MessageSquare, Phone, PhoneOff } from 'lucide-react';
+import { Phone, PhoneOff } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { DEMO_PERSONAS } from '../domain/seed';
-import { USSD_CODE, ussd, type UssdResponse } from '../domain/ussd';
-import { useStore } from '../state/store';
-import { COMPLAINT_LABELS, Card, Field } from '../ui/kit';
+import { api, errorMessage } from '../api/client';
+import { USSD_CODE } from '../domain/ussd';
+import { useMeta } from '../state/session';
+import { Card, Field, Notice } from '../ui/kit';
 
+const DEMO_PHONES: [string, string][] = [
+  ['08031234567', 'Adaeze Okafor (08031234567)'],
+  ['08061234567', 'Musa Abdullahi (08061234567)'],
+  ['08091234567', 'Funke Adeyemi (08091234567)'],
+  ['07031234567', 'Blessing Eze (07031234567)'],
+  ['08099990000', 'Unregistered number (08099990000)'],
+];
+
+/** Phone simulator that talks to the real USSD gateway endpoint, exactly as an aggregator would. */
 export function Ussd() {
-  const store = useStore();
-  const { db, today } = store;
-  const phones = Object.values(DEMO_PERSONAS)
-    .map((id) => db.enrollees.find((e) => e.id === id)!)
-    .map((e) => [e.phone, `${e.firstName} ${e.lastName} (${e.phone})`] as const);
-  const [phone, setPhone] = useState<string>(phones[0][0]);
-  const [session, setSession] = useState<string | null>(null);
-  const [screen, setScreen] = useState<UssdResponse | null>(null);
+  const meta = useMeta();
+  const [phone, setPhone] = useState(DEMO_PHONES[0][0]);
+  const [custom, setCustom] = useState('');
+  const [session, setSession] = useState<{ id: string; text: string } | null>(null);
+  const [screen, setScreen] = useState<string | null>(null);
   const [input, setInput] = useState('');
-  const [sms, setSms] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const number = custom.trim() || phone;
 
-  const run = (text: string) => {
-    const res = ussd(phone, text, db.enrollees, today);
-    setScreen(res);
-    setSession(res.kind === 'CON' ? text : null);
-    setInput('');
-    if (res.action) {
-      const a = res.action;
-      if (a.type === 'pay') {
-        const r = store.pay(a.enrolleeId, a.frequency, 'ussd');
-        setSms((s) => [`HealthGuard: N${r.amount.toLocaleString('en-NG')} received. Cover active till ${r.paidThrough}.`, ...s]);
-      } else if (a.type === 'complaint') {
-        const c = store.fileComplaint({ enrolleeId: a.enrolleeId, category: a.category, description: `${COMPLAINT_LABELS[a.category]} (reported by USSD)`, channel: 'ussd' });
-        setSms((s) => [`HealthGuard: Complaint ${c.id} received. Your HMO will call you within 48 hours.`, ...s]);
-      } else {
-        setSms((s) => ['HealthGuard: Thanks! An enrolment agent will call you shortly.', ...s]);
-      }
+  const send = async (sessionId: string, text: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<string>('/ussd', { form: { sessionId, phoneNumber: number, text, serviceCode: USSD_CODE } });
+      const [kind, ...rest] = res.split(' ');
+      setScreen(rest.join(' '));
+      setSession(kind === 'CON' ? { id: sessionId, text } : null);
+      setInput('');
+      setTimeout(() => inputRef.current?.focus(), 0);
+    } catch (e) {
+      setError(errorMessage(e));
+      setSession(null);
+    } finally {
+      setBusy(false);
     }
-    setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   return (
@@ -48,67 +54,66 @@ export function Ussd() {
           </p>
         </div>
         <Card>
-          <Field label="Phone in your hand (demo)">
-            <select
-              value={phone}
-              onChange={(e) => {
-                setPhone(e.target.value);
-                setScreen(null);
-                setSession(null);
-              }}
-            >
-              {phones.map(([p, label]) => (
-                <option key={p} value={p}>
-                  {label}
-                </option>
-              ))}
-              <option value="08099990000">Unregistered number (08099990000)</option>
-            </select>
+          {meta.data?.demoLogins && (
+            <Field label="Phone in your hand (demo numbers)">
+              <select
+                value={phone}
+                onChange={(e) => {
+                  setPhone(e.target.value);
+                  setCustom('');
+                  setScreen(null);
+                  setSession(null);
+                }}
+              >
+                {DEMO_PHONES.map(([p, label]) => (
+                  <option key={p} value={p}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          <Field label="…or type any phone number" hint="Use the number you enrolled with to see your own cover.">
+            <input inputMode="tel" value={custom} onChange={(e) => setCustom(e.target.value.replace(/[^\d+]/g, ''))} placeholder="08031234567" />
           </Field>
           <ul className="checklist small">
             <li>1 → check cover · 2 → pay premium · 3 → find hospital · 4 → report a problem · 5 → my ID</li>
-            <li>Payments and complaints made here appear instantly in the member, HMO and regulator views.</li>
+            <li>This simulator calls the same endpoint a USSD aggregator would. Payments start as pending until the mobile-money provider confirms them; complaints go straight to the HMO.</li>
           </ul>
         </Card>
-        {sms.length > 0 && (
-          <Card
-            title={
-              <>
-                <MessageSquare size={18} aria-hidden /> SMS inbox
-              </>
-            }
-          >
-            <ul className="list">
-              {sms.map((m, i) => (
-                <li key={i} className="small">
-                  {m}
-                </li>
-              ))}
-            </ul>
-          </Card>
-        )}
+        {error && <Notice tone="red">{error}</Notice>}
       </div>
       <div className="phone" aria-label="Phone simulator">
         <div className="phone-screen" aria-live="polite">
-          {screen ? <pre>{screen.text}</pre> : <pre className="dim">Dial {USSD_CODE}</pre>}
+          {busy ? <pre className="dim">USSD code running…</pre> : screen ? <pre>{screen}</pre> : <pre className="dim">Dial {USSD_CODE}</pre>}
         </div>
-        {session !== null ? (
+        {session ? (
           <form
             className="phone-input"
             onSubmit={(e) => {
               e.preventDefault();
               if (!input.trim()) return;
-              run(session === '' ? input.trim() : `${session}*${input.trim()}`);
+              send(session.id, session.text === '' ? input.trim() : `${session.text}*${input.trim()}`);
             }}
           >
-            <input ref={inputRef} inputMode="numeric" aria-label="Reply" value={input} onChange={(e) => setInput(e.target.value.replace(/[^0-9]/g, ''))} autoFocus />
-            <button type="submit">Send</button>
-            <button type="button" className="danger" onClick={() => { setSession(null); setScreen(null); }} aria-label="Cancel session">
+            <input ref={inputRef} inputMode="numeric" aria-label="Reply" value={input} onChange={(e) => setInput(e.target.value.replace(/[^0-9]/g, ''))} autoFocus disabled={busy} />
+            <button type="submit" disabled={busy}>
+              Send
+            </button>
+            <button
+              type="button"
+              className="danger"
+              aria-label="Cancel session"
+              onClick={() => {
+                setSession(null);
+                setScreen(null);
+              }}
+            >
               <PhoneOff size={16} />
             </button>
           </form>
         ) : (
-          <button className="dial" onClick={() => run('')}>
+          <button className="dial" disabled={busy} onClick={() => send(`web-${Date.now()}`, '')}>
             <Phone size={16} aria-hidden /> Dial {USSD_CODE}
           </button>
         )}

@@ -1,4 +1,6 @@
+import { resolve } from 'node:path';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
 import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyError } from 'fastify';
 import { ZodError } from 'zod';
@@ -52,6 +54,15 @@ export async function buildApp(opts: { sql: Sql; config: Config; nin?: NinVerifi
   await app.register(hmoRoutes(ctx), { prefix: '/api/v1/hmo' });
   await app.register(regulatorRoutes(ctx), { prefix: '/api/v1/regulator' });
   await app.register(integrationRoutes(ctx), { prefix: '/api/v1' });
+
+  if (opts.config.staticDir) {
+    // Serve the built frontend from the same origin (no CORS needed in production).
+    await app.register(fastifyStatic, { root: resolve(opts.config.staticDir), index: 'index.html', cacheControl: false });
+    app.addHook('onSend', async (req, reply) => {
+      if (req.url.startsWith('/assets/')) reply.header('cache-control', 'public, max-age=31536000, immutable');
+      else if (!req.url.startsWith('/api/')) reply.header('cache-control', 'no-cache');
+    });
+  }
 
   return { app, ctx };
 }

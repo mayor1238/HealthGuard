@@ -1,12 +1,13 @@
-import { Building2, Landmark, Menu, Phone, RotateCcw, ShieldCheck, Stethoscope, UserRound, UserPlus, X } from 'lucide-react';
+import { Building2, Landmark, LogOut, Menu, Phone, ShieldCheck, Stethoscope, UserPlus, UserRound, X } from 'lucide-react';
 import { useState } from 'react';
-import { useStore } from './state/store';
+import { roleLabel, useSession } from './state/session';
+import { RequireRole } from './ui/SignIn';
 import { useRoute } from './ui/kit';
-import { Landing } from './pages/Landing';
 import { Enroll } from './pages/Enroll';
+import { HmoPortal } from './pages/Hmo';
+import { Landing } from './pages/Landing';
 import { Member } from './pages/Member';
 import { ProviderPortal } from './pages/Provider';
-import { HmoPortal } from './pages/Hmo';
 import { Regulator } from './pages/Regulator';
 import { Ussd } from './pages/Ussd';
 
@@ -21,18 +22,25 @@ const NAV = [
 
 export function App() {
   const [section, tab, navigate] = useRoute();
-  const { reset } = useStore();
+  const { principal, logout } = useSession();
   const [open, setOpen] = useState(false);
 
   const page = (() => {
     switch (section) {
-      case 'enroll': return <Enroll />;
-      case 'member': return <Member tab={tab} navigate={navigate} />;
-      case 'provider': return <ProviderPortal tab={tab} navigate={navigate} />;
-      case 'hmo': return <HmoPortal tab={tab} navigate={navigate} />;
-      case 'regulator': return <Regulator />;
-      case 'ussd': return <Ussd />;
-      default: return <Landing />;
+      case 'enroll':
+        return <Enroll />;
+      case 'member':
+        return <RequireRole role="member"><Member tab={tab} navigate={navigate} /></RequireRole>;
+      case 'provider':
+        return <RequireRole role="provider"><ProviderPortal tab={tab} navigate={navigate} /></RequireRole>;
+      case 'hmo':
+        return <RequireRole role="hmo"><HmoPortal tab={tab} navigate={navigate} /></RequireRole>;
+      case 'regulator':
+        return <RequireRole role="regulator"><Regulator /></RequireRole>;
+      case 'ussd':
+        return <Ussd />;
+      default:
+        return <Landing />;
     }
   })();
 
@@ -51,21 +59,22 @@ export function App() {
               <Icon size={16} aria-hidden /> {label}
             </a>
           ))}
-          <button
-            className="ghost small"
-            title="Restore the demo data"
-            onClick={() => {
-              if (confirm('Reset all demo data to its starting state?')) reset();
-            }}
-          >
-            <RotateCcw size={14} aria-hidden /> Reset demo
-          </button>
+          {principal && (
+            <button
+              className="ghost small"
+              title={`Signed in as ${roleLabel[principal.role]}${principal.username ? ` (${principal.username})` : ''}`}
+              onClick={() => {
+                logout();
+                setOpen(false);
+              }}
+            >
+              <LogOut size={14} aria-hidden /> Sign out · {roleLabel[principal.role]}
+            </button>
+          )}
         </nav>
       </header>
       <main key={section}>{page}</main>
-      <footer className="footer">
-        HealthGuard prototype · demo data only · organisation names are fictional
-      </footer>
+      <footer className="footer">HealthGuard prototype · organisation names are fictional</footer>
     </>
   );
 }

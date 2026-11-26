@@ -175,6 +175,9 @@ describe('enrolment and premium payments', () => {
     await h.webhook({ reference: init.body.reference, status: 'success', amount: init.body.amount });
     const after = (await h.call('GET', `${V1}/member/profile`, undefined, trader)).body.enrollee.paidThrough;
     expect(after > before).toBe(true);
+    const history = (await h.call('GET', `${V1}/member/payments`, undefined, trader)).body as { paidAt?: string }[];
+    const dates = history.map((p) => p.paidAt ?? '9999');
+    expect(dates).toEqual([...dates].sort().reverse()); // newest first
   });
 });
 

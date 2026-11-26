@@ -419,3 +419,15 @@ tr.selected td { background: var(--brand-soft); }
   .barlist li { grid-template-columns: 6.5rem 1fr 3rem; }
   .idcard-row .qr { display: none; }
 }
+
+/* ---------- API states & sign-in ---------- */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--brand); border-radius: 50%; vertical-align: -2px; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+.stale { opacity: 0.6; transition: opacity 0.15s; }
+.signin { max-width: 520px; }
+.signin > * + * { margin-top: 1rem; }
+.demo-logins { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.demo-logins button { white-space: normal; text-align: left; }
+.inline-actions { display: inline-flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+.nowrap { white-space: nowrap; }

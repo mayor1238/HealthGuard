@@ -1,7 +1,6 @@
 import { ArrowRight, BadgeCheck, Banknote, Building2, Clock, Eye, FileSearch, Landmark, MessageSquareWarning, Phone, ShieldAlert, Smartphone, Stethoscope, UserRound, Users } from 'lucide-react';
 import { PLANS } from '../domain/catalog';
 import { quotePremium } from '../domain/pricing';
-import { DEMO_PERSONAS } from '../domain/seed';
 import { naira } from '../domain/util';
 import { Badge, go } from '../ui/kit';
 
@@ -85,7 +84,7 @@ export function Landing() {
               <span>HealthGuard</span>
               <BadgeCheck size={18} />
             </div>
-            <div className="idcard-id">{DEMO_PERSONAS.trader}</div>
+            <div className="idcard-id">HG-00000018</div>
             <div className="idcard-name">Adaeze Okafor</div>
             <div className="idcard-meta">
               <span>Standard plan</span>
@@ -147,7 +146,7 @@ export function Landing() {
           ))}
         </div>
         <p className="muted small center footnote">
-          <MessageSquareWarning size={14} aria-hidden /> All data here is generated demo data. Changes are saved in your browser; use “Reset demo” to start over.
+          <MessageSquareWarning size={14} aria-hidden /> Sign in to each portal with your account. On a demo server, one-click demo accounts are offered on every sign-in page.
         </p>
       </section>
     </div>

@@ -80,6 +80,17 @@ export const enrollees = {
   setPrimaryProvider: (sql: Sql, id: string, providerId: string) => update(sql, 'enrollees', 'id', id, { primaryProviderId: providerId }),
 };
 
+/** Adds `patientName` to records that carry an enrolleeId (for staff work queues). */
+export async function withPatientNames<T extends { enrolleeId: string }>(sql: Sql, rows: T[]): Promise<(T & { patientName: string })[]> {
+  const ids = [...new Set(rows.map((r) => r.enrolleeId))];
+  const names = new Map<string, string>();
+  if (ids.length) {
+    const found = await sql.query<{ id: string; first_name: string; last_name: string }>(`SELECT id, first_name, last_name FROM enrollees WHERE id = ANY($1)`, [ids]);
+    for (const r of found) names.set(r.id, `${r.first_name} ${r.last_name}`);
+  }
+  return rows.map((r) => ({ ...r, patientName: names.get(r.enrolleeId) ?? r.enrolleeId }));
+}
+
 // ---------------- Payments ----------------
 
 export interface PaymentRecord extends Omit<Payment, 'paidAt'> {
@@ -97,7 +108,8 @@ export const payments = {
   },
   setStatus: (sql: Sql, id: string, status: PaymentRecord['status'], paidAt?: string) => update(sql, 'payments', 'id', id, { status, paidAt: paidAt ?? null }),
   async list(sql: Sql, where = 'TRUE', params: unknown[] = []) {
-    return (await sql.query(`SELECT * FROM payments WHERE ${where} ORDER BY created_at DESC, id`, params)).map((r) => fromRow<PaymentRecord>(r));
+    // Pending first, then newest payment first.
+    return (await sql.query(`SELECT * FROM payments WHERE ${where} ORDER BY paid_at DESC NULLS FIRST, created_at DESC, id`, params)).map((r) => fromRow<PaymentRecord>(r));
   },
 };
 

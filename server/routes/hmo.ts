@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { hmoScorecard } from '../../src/domain/analytics';
 import { requireRole } from '../auth';
 import type { Ctx } from '../context';
-import { capitation, claims, complaints, loadDb, paRequests } from '../db/repo';
+import { capitation, claims, complaints, loadDb, paRequests, withPatientNames } from '../db/repo';
 import { decidePAManually, generateCapitation, payCapitation, payClaims, resolveComplaint, reviewHeldClaim } from '../services/care';
 import { parse, principal, text } from './util';
 
@@ -19,9 +19,13 @@ export const hmoRoutes = (ctx: Ctx): FastifyPluginAsync => async (app) => {
 
   app.get('/claims', async (req) => {
     const { queue } = parse(z.object({ queue: z.enum(['review', 'payable', 'all']).default('all') }), req.query);
-    if (queue === 'review') return claims.list(ctx.sql, `hmo_id = $1 AND status = 'pending_review'`, [mine(req)]);
-    if (queue === 'payable') return claims.list(ctx.sql, `hmo_id = $1 AND status IN ('approved', 'partially_approved')`, [mine(req)]);
-    return claims.list(ctx.sql, 'hmo_id = $1', [mine(req)], 500);
+    const rows =
+      queue === 'review'
+        ? await claims.list(ctx.sql, `hmo_id = $1 AND status = 'pending_review'`, [mine(req)])
+        : queue === 'payable'
+          ? await claims.list(ctx.sql, `hmo_id = $1 AND status IN ('approved', 'partially_approved')`, [mine(req)])
+          : await claims.list(ctx.sql, 'hmo_id = $1', [mine(req)], 500);
+    return withPatientNames(ctx.sql, rows);
   });
 
   app.post('/claims/:id/review', async (req) => {
@@ -37,7 +41,7 @@ export const hmoRoutes = (ctx: Ctx): FastifyPluginAsync => async (app) => {
 
   app.get('/pa-requests', async (req) => {
     const { status } = parse(z.object({ status: z.enum(['pending', 'approved', 'denied', 'used']).optional() }), req.query);
-    return status ? paRequests.list(ctx.sql, 'hmo_id = $1 AND status = $2', [mine(req), status]) : paRequests.list(ctx.sql, 'hmo_id = $1', [mine(req)]);
+    return withPatientNames(ctx.sql, status ? await paRequests.list(ctx.sql, 'hmo_id = $1 AND status = $2', [mine(req), status]) : await paRequests.list(ctx.sql, 'hmo_id = $1', [mine(req)]));
   });
 
   app.post('/pa-requests/:id/decision', async (req) => {
@@ -48,7 +52,7 @@ export const hmoRoutes = (ctx: Ctx): FastifyPluginAsync => async (app) => {
 
   app.get('/complaints', async (req) => {
     const { status } = parse(z.object({ status: z.enum(['open', 'escalated', 'resolved']).optional() }), req.query);
-    return status ? complaints.list(ctx.sql, 'hmo_id = $1 AND status = $2', [mine(req), status]) : complaints.list(ctx.sql, 'hmo_id = $1', [mine(req)]);
+    return withPatientNames(ctx.sql, status ? await complaints.list(ctx.sql, 'hmo_id = $1 AND status = $2', [mine(req), status]) : await complaints.list(ctx.sql, 'hmo_id = $1', [mine(req)]));
   });
 
   app.post('/complaints/:id/resolve', async (req) => {

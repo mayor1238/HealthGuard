@@ -22,7 +22,13 @@ To run against a real PostgreSQL database:
 DATABASE_URL=postgres://user:pass@localhost:5432/healthguard npm run server:dev
 ```
 
-To run the full stack (PostgreSQL + API) in Docker:
+To run the API and the web app together with hot reload (web on http://localhost:5173, proxied to the API):
+
+```bash
+npm run dev:all
+```
+
+To run the full stack (PostgreSQL + API + web app on http://localhost:8080) in Docker:
 
 ```bash
 docker compose up --build
@@ -59,6 +65,7 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/healthguard_test npx vites
 - **Claims integrity:** claims for the same member are serialised with a Postgres advisory lock, so two copies of a bill submitted at once can't both pass the duplicate check. A test proves this; it fails if the lock is removed. Paying a batch only pays claims that are still payable, so double payment is impossible.
 - **Audit log:** every state change, and every patient lookup by a hospital, is written to `audit_log` with who did it and when. Regulators can read it.
 - **Background job:** every 15 minutes, complaints left open past 48 hours are escalated to the regulator.
+- **Web app:** set `STATIC_DIR` to the built frontend (`dist`) and the API serves it from the same address, so no CORS is needed in production. The Docker image does this. Hashed asset files are cached for a year; `index.html` is revalidated every time.
 - **Hardening:** rate limits on login, enrolment and USSD; a 256 KB body limit; `nosniff`, `no-store` and frame-deny headers; an allow-list for CORS; authorization headers redacted from logs; required secrets enforced in production; dev-only routes disabled in production.
 
 ## API (prefix `/api/v1`)
@@ -66,6 +73,7 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/healthguard_test npx vites
 **Public**
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/meta` | Environment and whether demo logins / the dev payment simulator are on |
 | POST | `/auth/login` | `{username, password}` returns `{token, user}` |
 | GET | `/auth/me` | The current principal |
 | GET | `/catalog` | Plans, HMOs, providers, tariffs, diagnoses, labels |
@@ -94,5 +102,4 @@ See `.env.example`. In production, `DATABASE_URL`, `JWT_SECRET` (at least 32 cha
 - **External services are stand-ins.** NIN verification (`NinVerifier`) accepts any well-formed NIN, payouts to hospitals are only recorded (no bank transfer), and SMS is not sent. Each sits behind a small interface ready for a real provider (NIMC, Paystack/Flutterwave, a bank payout API, Africa's Talking).
 - Reference data (plans, providers, tariffs) is still in code (`src/domain/catalog.ts`). It should move into database tables with admin screens.
 - Regulator and HMO analytics load the full dataset into memory. That's fine for a pilot, but they should move to SQL aggregates or materialised views before national scale.
-- The frontend still uses its in-browser store. The next step is an API client so the portals use this server.
 - Missing for production: refresh tokens or session revocation, MFA for HMO and regulator staff, field-level encryption for clinical data, and backups and monitoring.

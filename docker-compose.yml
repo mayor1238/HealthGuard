@@ -1,4 +1,4 @@
-# Local production-like stack: PostgreSQL + HealthGuard API.
+# Local production-like stack: PostgreSQL + HealthGuard (API and web app on http://localhost:8080).
 #   docker compose up --build
 # Secrets below are for local use only — set real ones in your deployment platform.
 services:

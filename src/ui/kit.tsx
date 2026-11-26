@@ -138,3 +138,29 @@ export const ComplaintBadge = ({ c }: { c: Complaint }) => <Badge tone={COMPLAIN
 export { COMPLAINT_LABELS } from '../domain/catalog';
 
 export const pct = (n: number) => `${Math.round(n * 100)}%`;
+
+// ---------- Async states ----------
+
+export const Loading = ({ label = 'Loading…' }: { label?: string }) => (
+  <p className="empty" role="status" aria-live="polite">
+    <span className="spinner" aria-hidden /> {label}
+  </p>
+);
+
+export const ErrorNotice = ({ error, onRetry }: { error: unknown; onRetry?: () => void }) => (
+  <Notice tone="red">
+    {error instanceof Error ? error.message : 'Something went wrong'}{' '}
+    {onRetry && (
+      <button className="ghost small" onClick={onRetry}>
+        Try again
+      </button>
+    )}
+  </Notice>
+);
+
+/** Renders loading / error states for a query, then `children(data)`. */
+export function Loadable<T>({ q, children, label }: { q: { data?: T; error: unknown; isPending: boolean; refetch: () => unknown }; children: (data: T) => ReactNode; label?: string }) {
+  if (q.isPending) return <Loading label={label} />;
+  if (q.error || q.data === undefined) return <ErrorNotice error={q.error} onRetry={() => q.refetch()} />;
+  return <>{children(q.data)}</>;
+}

@@ -13,7 +13,13 @@ export const regulatorRoutes = (ctx: Ctx): FastifyPluginAsync => async (app) => 
   // aggregates / materialised views before national scale.
   app.get('/summary', async () => {
     const db = await loadDb(ctx.sql);
-    return { summary: systemSummary(db, ctx.today()), hmos: hmoScorecard(db, ctx.today()) };
+    const flags: Record<string, number> = {};
+    for (const c of db.claims) for (const f of c.fraudFlags) flags[f.rule] = (flags[f.rule] ?? 0) + 1;
+    return {
+      summary: systemSummary(db, ctx.today()),
+      hmos: hmoScorecard(db, ctx.today()),
+      fraudFlags: Object.entries(flags).sort((a, b) => b[1] - a[1]).map(([rule, count]) => ({ rule, count })),
+    };
   });
 
   app.get('/complaints', async (req) => {

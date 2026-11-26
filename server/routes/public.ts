@@ -15,6 +15,14 @@ export const publicRoutes = (ctx: Ctx): FastifyPluginAsync => async (app) => {
     return login(ctx, body.username, body.password);
   });
 
+  /** Lets the UI know which demo conveniences are switched on. */
+  app.get('/meta', async () => ({
+    environment: ctx.config.env,
+    today: ctx.today(),
+    devGateway: ctx.config.env !== 'production',
+    demoLogins: ctx.config.seedDemo,
+  }));
+
   app.get('/auth/me', async (req) => ({ principal: await authenticate(ctx, req) }));
 
   app.get('/catalog', async (_req, reply) => {

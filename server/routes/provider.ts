@@ -7,7 +7,7 @@ import { ageOn } from '../../src/domain/util';
 import { requireRole } from '../auth';
 import type { Ctx } from '../context';
 import { notFound } from '../context';
-import { audit, capitation, claims, paRequests } from '../db/repo';
+import { audit, capitation, claims, paRequests, withPatientNames } from '../db/repo';
 import { previewClaim, requestPA, submitClaim } from '../services/care';
 import { findMember } from '../services/members';
 import { category, isoDate, naira, parse, principal, text } from './util';
@@ -52,7 +52,7 @@ export const providerRoutes = (ctx: Ctx): FastifyPluginAsync => async (app) => {
     };
   });
 
-  app.get('/pa-requests', async (req) => paRequests.list(ctx.sql, 'provider_id = $1', [mine(req)]));
+  app.get('/pa-requests', async (req) => withPatientNames(ctx.sql, await paRequests.list(ctx.sql, 'provider_id = $1', [mine(req)])));
 
   app.post('/pa-requests', async (req, reply) => {
     const b = parse(z.object({ enrolleeId: text(20), category, description: text(500), estimatedCost: naira }), req.body);
@@ -69,9 +69,10 @@ export const providerRoutes = (ctx: Ctx): FastifyPluginAsync => async (app) => {
 
   app.get('/claims', async (req) => {
     const q = parse(z.object({ status: z.enum(['pending_review', 'approved', 'partially_approved', 'rejected', 'paid']).optional(), limit: z.coerce.number().int().min(1).max(500).default(100) }), req.query);
-    return q.status
-      ? claims.list(ctx.sql, 'provider_id = $1 AND status = $2', [mine(req), q.status], q.limit)
-      : claims.list(ctx.sql, 'provider_id = $1', [mine(req)], q.limit);
+    const rows = q.status
+      ? await claims.list(ctx.sql, 'provider_id = $1 AND status = $2', [mine(req), q.status], q.limit)
+      : await claims.list(ctx.sql, 'provider_id = $1', [mine(req)], q.limit);
+    return withPatientNames(ctx.sql, rows);
   });
 
   app.get('/claims/:id', async (req) => {

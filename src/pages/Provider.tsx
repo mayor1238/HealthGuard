@@ -1,14 +1,16 @@
+import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, Plus, Search, Trash2, XCircle } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { adjudicate, utilisedInYear, type ClaimDraft } from '../domain/adjudication';
+import { useEffect, useState } from 'react';
+import { ApiError, api } from '../api/client';
+import type { EligibilityView, NamedClaim, NamedPA } from '../api/types';
+import type { AdjudicationResult } from '../domain/adjudication';
 import { claimAgeDays, isAwaitingPayment, isOverdue } from '../domain/analytics';
-import { CATEGORY_LABELS, DIAGNOSES, PROVIDERS, TARIFFS, hmoById, planById, providerById, tariffByCode } from '../domain/catalog';
+import { CATEGORY_LABELS, DIAGNOSES, TARIFFS, hmoById, providerById, tariffByCode } from '../domain/catalog';
 import { PA_AUTO_APPROVE_LIMIT } from '../domain/preauth';
-import { checkEligibility } from '../domain/pricing';
-import type { ClaimLine, Enrollee, PARequest, Provider, ServiceCategory } from '../domain/types';
-import { ageOn, isValidHealthGuardId, naira, prettyDate } from '../domain/util';
-import { useStore } from '../state/store';
-import { Badge, Card, ClaimBadge, CoverBadge, Empty, Field, Notice, PABadge, Stat, Tabs } from '../ui/kit';
+import type { CapitationPayment, Claim, ClaimLine, PARequest, ServiceCategory } from '../domain/types';
+import { naira, prettyDate } from '../domain/util';
+import { useApiMutation, useApiQuery, useMeta, useSession } from '../state/session';
+import { Badge, Card, ClaimBadge, CoverBadge, Empty, ErrorNotice, Field, Loadable, Loading, Notice, PABadge, Stat, Tabs } from '../ui/kit';
 
 type Tab = 'verify' | 'preauth' | 'claim' | 'claims' | 'capitation';
 const TABS: [Tab, string][] = [
@@ -18,26 +20,28 @@ const TABS: [Tab, string][] = [
   ['claims', 'My claims'],
   ['capitation', 'Capitation'],
 ];
+const PROVIDER = ['provider'];
 
-/** Find an enrollee by HealthGuard ID, phone number or NIN. */
-function lookup(enrollees: Enrollee[], q: string): { enrollee?: Enrollee; error?: string } {
-  const v = q.trim().toUpperCase();
-  if (!v) return {};
-  if (v.startsWith('HG-')) {
-    if (!isValidHealthGuardId(v)) return { error: 'That ID fails its check digit — probably a typo. Ask the patient to read it again.' };
-    const e = enrollees.find((x) => x.id === v);
-    return e ? { enrollee: e } : { error: 'No member with this ID.' };
-  }
-  const digits = v.replace(/\D/g, '');
-  const e = enrollees.find((x) => x.phone === digits || x.nin === digits);
-  return e ? { enrollee: e } : { error: 'No member found for that phone number or NIN.' };
+function useDebounced<T>(value: T, ms = 400) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+/** Live lookup by HealthGuard ID, phone or NIN. */
+function usePatient(q: string) {
+  const term = useDebounced(q.trim());
+  return useApiQuery<EligibilityView>(['provider', 'eligibility', term], term.length >= 6 ? `/provider/eligibility?q=${encodeURIComponent(term)}` : null);
 }
 
 export function ProviderPortal({ tab, navigate }: { tab?: string; navigate: (p: string) => void }) {
-  const { acting, setActing } = useStore();
+  const { principal } = useSession();
   const current = (TABS.some(([t]) => t === tab) ? tab : 'verify') as Tab;
-  const provider = providerById(acting.providerId)!;
-  const [patientId, setPatientId] = useState('');
+  const provider = providerById(principal!.providerId!)!;
+  const [patient, setPatient] = useState('');
 
   return (
     <div className="stack">
@@ -49,33 +53,28 @@ export function ProviderPortal({ tab, navigate }: { tab?: string; navigate: (p: 
             {provider.accredited ? <Badge tone="green">Accredited</Badge> : <Badge tone="red">Not accredited</Badge>}
           </p>
         </div>
-        <Field label="Signed in as (demo)">
-          <select value={provider.id} onChange={(e) => setActing({ providerId: e.target.value })}>
-            {PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} — {p.state}
-              </option>
-            ))}
-          </select>
-        </Field>
       </div>
       <Tabs<Tab> value={current} onChange={(t) => navigate(`provider/${t}`)} tabs={TABS} />
-      {current === 'verify' && <Verify providerId={provider.id} onUse={(id, next) => { setPatientId(id); navigate(`provider/${next}`); }} />}
-      {current === 'preauth' && <PreAuth providerId={provider.id} patientId={patientId} setPatientId={setPatientId} />}
-      {current === 'claim' && <NewClaim providerId={provider.id} patientId={patientId} setPatientId={setPatientId} navigate={navigate} />}
-      {current === 'claims' && <MyClaims providerId={provider.id} />}
-      {current === 'capitation' && <Capitation providerId={provider.id} />}
+      {current === 'verify' && (
+        <Verify
+          onUse={(id, next) => {
+            setPatient(id);
+            navigate(`provider/${next}`);
+          }}
+        />
+      )}
+      {current === 'preauth' && <PreAuth patient={patient} setPatient={setPatient} />}
+      {current === 'claim' && <NewClaim patient={patient} setPatient={setPatient} navigate={navigate} />}
+      {current === 'claims' && <MyClaims />}
+      {current === 'capitation' && <Capitation level={provider.level} />}
     </div>
   );
 }
 
-function Verify({ providerId, onUse }: { providerId: string; onUse: (id: string, next: Tab) => void }) {
-  const { db } = useStore();
+function Verify({ onUse }: { onUse: (id: string, next: Tab) => void }) {
   const [q, setQ] = useState('');
   const [submitted, setSubmitted] = useState('');
-  const res = lookup(db.enrollees, submitted);
-  const provider = providerById(providerId)!;
-  const e = res.enrollee;
+  const res = useApiQuery<EligibilityView>(['provider', 'eligibility', submitted], submitted ? `/provider/eligibility?q=${encodeURIComponent(submitted)}` : null);
 
   return (
     <div className="grid two wide-right">
@@ -84,7 +83,7 @@ function Verify({ providerId, onUse }: { providerId: string; onUse: (id: string,
           className="stack-sm"
           onSubmit={(ev) => {
             ev.preventDefault();
-            setSubmitted(q);
+            setSubmitted(q.trim());
           }}
         >
           <Field label="HealthGuard ID, phone number or NIN" hint="Scan the QR on the member card, or type. Try HG-00000018 or 08061234567.">
@@ -96,11 +95,15 @@ function Verify({ providerId, onUse }: { providerId: string; onUse: (id: string,
             </div>
           </Field>
         </form>
-        {res.error && <Notice tone="red">{res.error}</Notice>}
-        <p className="muted small">Results are live — no phone calls to the HMO, no waiting.</p>
+        {res.error && <Notice tone="red">{res.error.message}</Notice>}
+        <p className="muted small">Results are live from the scheme database. Every lookup is recorded in the audit log.</p>
       </Card>
-      {e ? (
-        <PatientCard e={e} onUse={onUse} provider={provider} />
+      {res.isFetching && !res.data ? (
+        <Card>
+          <Loading label="Checking cover…" />
+        </Card>
+      ) : res.data ? (
+        <PatientCard e={res.data} onUse={onUse} />
       ) : (
         <Card>
           <Empty>Search for a patient to see their cover, benefits and what needs approval.</Empty>
@@ -110,47 +113,33 @@ function Verify({ providerId, onUse }: { providerId: string; onUse: (id: string,
   );
 }
 
-function PatientCard({ e, onUse, provider }: { e: Enrollee; onUse: (id: string, next: Tab) => void; provider: Provider }) {
-  const { db, today } = useStore();
-  const elig = checkEligibility(e, today);
-  const plan = planById(e.planId);
-  const contracted = provider.hmoIds.includes(e.hmoId);
-  const isPrimary = e.primaryProviderId === provider.id;
-  const used = utilisedInYear(e.id, today.slice(0, 4), db.claims);
+function PatientCard({ e, onUse }: { e: EligibilityView; onUse: (id: string, next: Tab) => void }) {
+  const elig = e.eligibility;
   return (
-    <Card
-      title={
-        <>
-          {e.firstName} {e.lastName}
-        </>
-      }
-      action={<CoverBadge status={elig.status} />}
-    >
+    <Card title={<>{e.firstName} {e.lastName}</>} action={<CoverBadge status={elig.status} />}>
       <p className="muted small">
-        {e.id} · {e.gender}, {ageOn(e.dateOfBirth, today)} yrs · {e.dependants} dependant(s) · NIN {e.ninVerified ? 'verified' : <Badge tone="amber">not verified</Badge>}
+        {e.id} · {e.gender}, {e.age} yrs · {e.dependants} dependant(s) · NIN {e.ninVerified ? 'verified' : <Badge tone="amber">not verified</Badge>}
       </p>
-      <Notice tone={!elig.eligible || !contracted ? 'red' : elig.status === 'active' && isPrimary ? 'green' : 'amber'}>
-        {!contracted
-          ? `Your facility is not contracted with ${hmoById(e.hmoId).name}. Stabilise emergencies, then refer.`
+      <Notice tone={!elig.eligible || !e.contractedWithHmo ? 'red' : elig.status === 'active' && !e.referralNeeded ? 'green' : 'amber'}>
+        {!e.contractedWithHmo
+          ? `Your facility is not contracted with ${e.hmo.name}. Stabilise emergencies, then refer.`
           : !elig.eligible
             ? elig.message
-            : isPrimary || provider.level !== 'primary'
-              ? `${elig.message}${provider.level !== 'primary' ? ' Non-emergency care here needs a referral PA code.' : ''}`
-              : `${elig.message} Note: registered at ${providerById(e.primaryProviderId)?.name} — non-emergency care here needs a PA code.`}
+            : `${elig.message}${e.referralNeeded ? ' Non-emergency care here needs a referral PA code.' : ''}`}
       </Notice>
       <dl className="summary">
         <dt>Plan</dt>
-        <dd>{plan.name}</dd>
+        <dd>{e.plan.name}</dd>
         <dt>HMO</dt>
-        <dd>{hmoById(e.hmoId).name}</dd>
+        <dd>{e.hmo.name}</dd>
         <dt>Benefit left</dt>
-        <dd>{naira(plan.annualLimit - used)}</dd>
+        <dd>{naira(e.benefitRemaining)}</dd>
       </dl>
       <div className="benefit-dots">
-        {(Object.keys(plan.benefits) as ServiceCategory[]).map((k) => {
-          const b = plan.benefits[k];
+        {(Object.keys(e.plan.benefits) as ServiceCategory[]).map((k) => {
+          const b = e.plan.benefits[k];
           return (
-            <span key={k} className={b.covered ? 'on' : 'off'} title={b.covered ? `Co-pay ${Math.round(b.copay * 100)}%${b.requiresPA ? ', PA required' : ''}` : 'Not covered'}>
+            <span key={k} className={b.covered ? 'on' : 'off'}>
               {b.covered ? '✓' : '✕'} {CATEGORY_LABELS[k]}
               {b.covered && b.requiresPA ? ' (PA)' : ''}
               {b.covered && b.copay ? ` ${Math.round(b.copay * 100)}%` : ''}
@@ -158,7 +147,7 @@ function PatientCard({ e, onUse, provider }: { e: Enrollee; onUse: (id: string, 
           );
         })}
       </div>
-      {elig.eligible && contracted && (
+      {elig.eligible && e.contractedWithHmo && (
         <div className="actions">
           <button onClick={() => onUse(e.id, 'claim')}>Start claim</button>
           <button className="secondary" onClick={() => onUse(e.id, 'preauth')}>
@@ -170,14 +159,32 @@ function PatientCard({ e, onUse, provider }: { e: Enrollee; onUse: (id: string, 
   );
 }
 
-function PreAuth({ providerId, patientId, setPatientId }: { providerId: string; patientId: string; setPatientId: (s: string) => void }) {
-  const { db, requestPA } = useStore();
+function PatientField({ value, onChange, patient }: { value: string; onChange: (v: string) => void; patient: ReturnType<typeof usePatient> }) {
+  return (
+    <>
+      <Field label="Patient (ID, phone or NIN)" error={value.trim().length >= 6 && patient.error ? patient.error.message : undefined}>
+        <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="HG-00000018" />
+      </Field>
+      {patient.data && (
+        <p className="small">
+          ✓ {patient.data.firstName} {patient.data.lastName} · {patient.data.id} · {patient.data.plan.name} <CoverBadge status={patient.data.eligibility.status} />
+        </p>
+      )}
+    </>
+  );
+}
+
+function PreAuth({ patient: q, setPatient }: { patient: string; setPatient: (s: string) => void }) {
+  const patient = usePatient(q);
+  const list = useApiQuery<NamedPA[]>(['provider', 'pa'], '/provider/pa-requests');
   const [category, setCategory] = useState<ServiceCategory>('imaging');
   const [description, setDescription] = useState('');
   const [cost, setCost] = useState(15000);
-  const [result, setResult] = useState<PARequest | null>(null);
-  const found = lookup(db.enrollees, patientId);
-  const mine = db.paRequests.filter((p) => p.providerId === providerId).slice(0, 15);
+  const request = useApiMutation(
+    () => api<PARequest>('/provider/pa-requests', { body: { enrolleeId: patient.data!.id, category, description: description.trim() || CATEGORY_LABELS[category], estimatedCost: cost } }),
+    [PROVIDER],
+  );
+  const result = request.data;
 
   return (
     <div className="grid two">
@@ -186,14 +193,10 @@ function PreAuth({ providerId, patientId, setPatientId }: { providerId: string; 
           className="stack-sm"
           onSubmit={(ev) => {
             ev.preventDefault();
-            if (!found.enrollee) return;
-            setResult(requestPA({ enrolleeId: found.enrollee.id, providerId, category, description: description || CATEGORY_LABELS[category], estimatedCost: cost }));
+            if (patient.data) request.mutate(undefined);
           }}
         >
-          <Field label="Patient (ID, phone or NIN)" error={patientId && found.error}>
-            <input value={patientId} onChange={(e) => setPatientId(e.target.value)} placeholder="HG-00000018" />
-          </Field>
-          {found.enrollee && <p className="small">✓ {found.enrollee.firstName} {found.enrollee.lastName} · {planById(found.enrollee.planId).name}</p>}
+          <PatientField value={q} onChange={setPatient} patient={patient} />
           <div className="form-grid">
             <Field label="Service">
               <select value={category} onChange={(e) => setCategory(e.target.value as ServiceCategory)}>
@@ -205,17 +208,18 @@ function PreAuth({ providerId, patientId, setPatientId }: { providerId: string; 
               </select>
             </Field>
             <Field label="Estimated cost (₦)">
-              <input type="number" min={0} step={500} value={cost} onChange={(e) => setCost(Number(e.target.value) || 0)} />
+              <input type="number" min={0} step={500} value={cost} onChange={(e) => setCost(Math.max(0, Number(e.target.value) || 0))} />
             </Field>
           </div>
           <Field label="Clinical reason">
-            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Suspected pneumonia — chest X-ray" />
+            <input value={description} maxLength={500} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Suspected pneumonia — chest X-ray" />
           </Field>
-          <button type="submit" disabled={!found.enrollee}>
-            Request code
+          <button type="submit" disabled={!patient.data || request.isPending}>
+            {request.isPending ? 'Requesting…' : 'Request code'}
           </button>
           <p className="muted small">Covered requests up to {naira(PA_AUTO_APPROVE_LIMIT)} (except surgery) are approved instantly. Others go to an HMO doctor with a 24-hour deadline.</p>
         </form>
+        {request.error && <ErrorNotice error={request.error} />}
         {result && (
           <Notice tone={result.status === 'approved' ? 'green' : result.status === 'pending' ? 'amber' : 'red'}>
             {result.status === 'approved' ? <CheckCircle2 size={16} aria-hidden /> : result.status === 'denied' ? <XCircle size={16} aria-hidden /> : null}{' '}
@@ -225,36 +229,39 @@ function PreAuth({ providerId, patientId, setPatientId }: { providerId: string; 
         )}
       </Card>
       <Card title="Recent PA requests">
-        {mine.length === 0 ? (
-          <Empty>No requests yet.</Empty>
-        ) : (
-          <ul className="list">
-            {mine.map((p) => {
-              const e = db.enrollees.find((x) => x.id === p.enrolleeId);
-              return (
-                <li key={p.code}>
-                  <div className="list-row">
-                    <strong>
-                      {p.code} · {CATEGORY_LABELS[p.category]}
-                    </strong>
-                    <PABadge pa={p} />
-                  </div>
-                  <span className="muted small">
-                    {e?.firstName} {e?.lastName} · {naira(p.estimatedCost)} · {p.autoDecided ? 'instant decision' : 'reviewed by HMO doctor'}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <Loadable q={list}>
+          {(rows) =>
+            rows.length === 0 ? (
+              <Empty>No requests yet.</Empty>
+            ) : (
+              <ul className="list">
+                {rows.slice(0, 15).map((p) => (
+                  <li key={p.code}>
+                    <div className="list-row">
+                      <strong>
+                        {p.code} · {CATEGORY_LABELS[p.category]}
+                      </strong>
+                      <PABadge pa={p} />
+                    </div>
+                    <span className="muted small">
+                      {p.patientName} · {naira(p.estimatedCost)} · {p.autoDecided ? 'instant decision' : 'reviewed by HMO doctor'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
+        </Loadable>
       </Card>
     </div>
   );
 }
 
-function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerId: string; patientId: string; setPatientId: (s: string) => void; navigate: (p: string) => void }) {
-  const { db, today, submitClaim } = useStore();
-  const found = lookup(db.enrollees, patientId);
+function NewClaim({ patient: q, setPatient, navigate }: { patient: string; setPatient: (s: string) => void; navigate: (p: string) => void }) {
+  const meta = useMeta();
+  const today = meta.data?.today ?? new Date().toISOString().slice(0, 10);
+  const patient = usePatient(q);
+  const pas = useApiQuery<NamedPA[]>(['provider', 'pa'], '/provider/pa-requests');
   const [encounterDate, setEncounterDate] = useState(today);
   const [diagnosis, setDiagnosis] = useState(DIAGNOSES[0]);
   const [paCode, setPaCode] = useState('');
@@ -263,33 +270,38 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
     { tariffCode: 'LAB-01', quantity: 1, unitPrice: 2500 },
     { tariffCode: 'DRG-01', quantity: 1, unitPrice: 3500 },
   ]);
-  const [submitted, setSubmitted] = useState<string | null>(null);
-  const provider = providerById(providerId)!;
-
-  const draft: ClaimDraft | null = found.enrollee
-    ? { enrolleeId: found.enrollee.id, providerId, encounterDate, submittedAt: today, diagnosis, paCode: paCode.trim().toUpperCase() || undefined, lines }
-    : null;
-  const preview = useMemo(
-    () => (draft && found.enrollee ? adjudicate(draft, { enrollee: found.enrollee, provider, paRequests: db.paRequests, history: db.claims }) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [JSON.stringify(draft), db],
-  );
-  const myPAs = found.enrollee ? db.paRequests.filter((p) => p.enrolleeId === found.enrollee!.id && p.providerId === providerId && (p.status === 'approved' || p.status === 'used')) : [];
+  const body = patient.data && lines.length ? { enrolleeId: patient.data.id, encounterDate, diagnosis, paCode: paCode.trim() || undefined, lines } : null;
+  const debouncedBody = useDebounced(body, 350);
+  const preview = useQuery<AdjudicationResult, ApiError>({
+    queryKey: ['provider', 'preview', debouncedBody],
+    queryFn: () => api<AdjudicationResult>('/provider/claims/preview', { body: debouncedBody }),
+    enabled: !!debouncedBody,
+    placeholderData: (prev) => prev,
+  });
+  const submit = useApiMutation(() => api<Claim>('/provider/claims', { body }), [PROVIDER]);
+  const myPAs = (pas.data ?? []).filter((p) => p.enrolleeId === patient.data?.id && (p.status === 'approved' || p.status === 'used'));
   const updateLine = (i: number, patch: Partial<ClaimLine>) => setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
 
-  if (submitted) {
-    const c = db.claims.find((x) => x.id === submitted)!;
+  if (submit.data) {
+    const c = submit.data;
     return (
       <Card title={`Claim ${c.id} submitted`} action={<ClaimBadge claim={c} />}>
         <p>
           {c.status === 'pending_review'
-            ? 'Held for a quick human review because the fraud engine raised a flag. You will be notified of the decision.'
+            ? 'Held for a quick human review because the fraud engine raised a flag. You will see the decision under My claims.'
             : c.status === 'rejected'
-              ? 'Rejected — see the reasons below. Fix and resubmit if needed.'
+              ? 'Rejected — see the reasons in the preview. Fix and resubmit if needed.'
               : `Decided instantly. ${naira(c.approvedTotal)} will be paid by ${hmoById(c.hmoId).name} within ${hmoById(c.hmoId).claimsSlaDays} days.`}
         </p>
         <div className="actions">
-          <button onClick={() => { setSubmitted(null); setPatientId(''); }}>New claim</button>
+          <button
+            onClick={() => {
+              submit.reset();
+              setPatient('');
+            }}
+          >
+            New claim
+          </button>
           <button className="secondary" onClick={() => navigate('provider/claims')}>
             Track my claims
           </button>
@@ -303,9 +315,9 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
       <Card title="Submit a claim">
         <div className="stack-sm">
           <div className="form-grid">
-            <Field label="Patient (ID, phone or NIN)" error={patientId && found.error}>
-              <input value={patientId} onChange={(e) => setPatientId(e.target.value)} placeholder="HG-00000018" />
-            </Field>
+            <div className="stack-sm">
+              <PatientField value={q} onChange={setPatient} patient={patient} />
+            </div>
             <Field label="Date of visit">
               <input type="date" value={encounterDate} max={today} onChange={(e) => setEncounterDate(e.target.value)} />
             </Field>
@@ -317,7 +329,7 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
               </select>
             </Field>
             <Field label="PA code (if any)">
-              <input list="pa-codes" value={paCode} onChange={(e) => setPaCode(e.target.value)} placeholder="PA-XXXXXX" />
+              <input list="pa-codes" value={paCode} onChange={(e) => setPaCode(e.target.value)} placeholder="PA-XXXXXXXX" />
               <datalist id="pa-codes">
                 {myPAs.map((p) => (
                   <option key={p.code} value={p.code}>
@@ -327,7 +339,6 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
               </datalist>
             </Field>
           </div>
-          {found.enrollee && <p className="small">✓ {found.enrollee.firstName} {found.enrollee.lastName} · {planById(found.enrollee.planId).name}</p>}
           <div className="table-wrap">
             <table className="lines-table">
               <thead>
@@ -344,11 +355,7 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
                 {lines.map((l, i) => (
                   <tr key={i}>
                     <td>
-                      <select
-                        aria-label="Service"
-                        value={l.tariffCode}
-                        onChange={(e) => updateLine(i, { tariffCode: e.target.value, unitPrice: tariffByCode(e.target.value)!.price })}
-                      >
+                      <select aria-label="Service" value={l.tariffCode} onChange={(e) => updateLine(i, { tariffCode: e.target.value, unitPrice: tariffByCode(e.target.value)!.price })}>
                         {TARIFFS.map((t) => (
                           <option key={t.code} value={t.code}>
                             {t.code} · {t.description}
@@ -357,7 +364,7 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
                       </select>
                     </td>
                     <td>
-                      <input aria-label="Quantity" type="number" min={1} value={l.quantity} onChange={(e) => updateLine(i, { quantity: Math.max(0, Number(e.target.value) || 0) })} />
+                      <input aria-label="Quantity" type="number" min={1} max={100} value={l.quantity} onChange={(e) => updateLine(i, { quantity: Math.max(1, Math.min(100, Number(e.target.value) || 1)) })} />
                     </td>
                     <td>
                       <input aria-label="Unit price" type="number" min={0} step={100} value={l.unitPrice} onChange={(e) => updateLine(i, { unitPrice: Math.max(0, Number(e.target.value) || 0) })} />
@@ -372,28 +379,33 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
               </tbody>
             </table>
           </div>
+          {submit.error && <ErrorNotice error={submit.error} />}
           <div className="actions spread">
             <button className="ghost small" onClick={() => setLines([...lines, { tariffCode: 'DRG-03', quantity: 1, unitPrice: 600 }])}>
               <Plus size={14} aria-hidden /> Add service
             </button>
-            <button disabled={!draft || lines.length === 0} onClick={() => draft && setSubmitted(submitClaim(draft).id)}>
-              Submit claim
+            <button disabled={!body || submit.isPending} onClick={() => submit.mutate(undefined)}>
+              {submit.isPending ? 'Submitting…' : 'Submit claim'}
             </button>
           </div>
         </div>
       </Card>
       <Card title="Live decision preview">
-        {!preview ? (
+        {!body ? (
           <Empty>Enter a patient to see exactly what will be paid — before you submit.</Empty>
+        ) : preview.error ? (
+          <ErrorNotice error={preview.error} />
+        ) : !preview.data ? (
+          <Loading label="Calculating…" />
         ) : (
-          <div className="stack-sm">
+          <div className={`stack-sm ${preview.isFetching ? 'stale' : ''}`}>
             <div className="grid three tight">
-              <Stat label="Billed" value={naira(preview.billedTotal)} />
-              <Stat label="Insurer pays" value={naira(preview.approvedTotal)} tone="green" />
-              <Stat label="Collect co-pay" value={naira(preview.copayTotal)} />
+              <Stat label="Billed" value={naira(preview.data.billedTotal)} />
+              <Stat label="Insurer pays" value={naira(preview.data.approvedTotal)} tone="green" />
+              <Stat label="Collect co-pay" value={naira(preview.data.copayTotal)} />
             </div>
             <ul className="decisions">
-              {preview.decisions.map((d, i) => (
+              {preview.data.decisions.map((d, i) => (
                 <li key={i} className={d.approved + d.copay === 0 ? 'rejected' : d.approved + d.copay < d.billed ? 'partial' : 'ok'}>
                   <div className="list-row">
                     <span>{tariffByCode(d.tariffCode)?.description ?? d.tariffCode}</span>
@@ -407,12 +419,13 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
                 </li>
               ))}
             </ul>
-            {preview.fraudFlags.length > 0 && (
+            {preview.data.fraudFlags.length > 0 && (
               <Notice tone="amber">
-                Risk score {preview.riskScore}/100: {preview.fraudFlags.map((f) => f.detail).join(' ')}
-                {preview.riskScore >= 40 ? ' This claim will be held for review.' : ''}
+                Risk score {preview.data.riskScore}/100: {preview.data.fraudFlags.map((f) => f.detail).join(' ')}
+                {preview.data.riskScore >= 40 ? ' This claim will be held for review.' : ''}
               </Notice>
             )}
+            <p className="muted small">Calculated by the HealthGuard server using the same rules that will decide the claim.</p>
           </div>
         )}
       </Card>
@@ -420,86 +433,86 @@ function NewClaim({ providerId, patientId, setPatientId, navigate }: { providerI
   );
 }
 
-function MyClaims({ providerId }: { providerId: string }) {
-  const { db, today } = useStore();
+function MyClaims() {
+  const meta = useMeta();
+  const today = meta.data?.today ?? new Date().toISOString().slice(0, 10);
+  const q = useApiQuery<NamedClaim[]>(['provider', 'claims'], '/provider/claims?limit=500');
   const [filter, setFilter] = useState<'all' | 'waiting' | 'paid' | 'rejected'>('all');
-  const claims = db.claims.filter((c) => c.providerId === providerId);
-  const waiting = claims.filter((c) => isAwaitingPayment(c) || c.status === 'pending_review');
-  const paid = claims.filter((c) => c.status === 'paid');
-  const shown = claims
-    .filter((c) => filter === 'all' || (filter === 'waiting' ? waiting.includes(c) : filter === 'paid' ? c.status === 'paid' : c.status === 'rejected'))
-    .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
-  const avgDays = paid.length ? paid.reduce((s, c) => s + claimAgeDays(c, today), 0) / paid.length : 0;
 
   return (
-    <div className="stack">
-      <div className="grid four tight">
-        <Stat label="Awaiting payment" value={naira(waiting.reduce((s, c) => s + c.approvedTotal, 0))} hint={`${waiting.length} claims`} />
-        <Stat label="Paid (all time)" value={naira(paid.reduce((s, c) => s + c.approvedTotal, 0))} hint={`${paid.length} claims`} tone="green" />
-        <Stat label="Average time to payment" value={`${avgDays.toFixed(1)} days`} />
-        <Stat label="Overdue (past SLA)" value={claims.filter((c) => isOverdue(c, today)).length} tone={claims.some((c) => isOverdue(c, today)) ? 'red' : undefined} hint="Escalated to regulator automatically" />
-      </div>
-      <Tabs
-        value={filter}
-        onChange={setFilter}
-        tabs={[
-          ['all', 'All'],
-          ['waiting', 'Waiting'],
-          ['paid', 'Paid'],
-          ['rejected', 'Rejected'],
-        ]}
-      />
-      {shown.length === 0 ? (
-        <Empty>No claims here.</Empty>
-      ) : (
-        <div className="table-wrap card flush">
-          <table>
-            <thead>
-              <tr>
-                <th>Claim</th>
-                <th>Patient</th>
-                <th>Visit</th>
-                <th>Billed</th>
-                <th>Approved</th>
-                <th>Status</th>
-                <th>Age</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.slice(0, 60).map((c) => {
-                const e = db.enrollees.find((x) => x.id === c.enrolleeId);
-                return (
-                  <tr key={c.id}>
-                    <td className="mono">{c.id}</td>
-                    <td>
-                      {e?.firstName} {e?.lastName}
-                    </td>
-                    <td>{prettyDate(c.encounterDate)}</td>
-                    <td>{naira(c.billedTotal)}</td>
-                    <td>{naira(c.approvedTotal)}</td>
-                    <td>
-                      <ClaimBadge claim={c} />
-                    </td>
-                    <td>
-                      {claimAgeDays(c, today)}d {isOverdue(c, today) && <Badge tone="red">Overdue</Badge>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+    <Loadable q={q}>
+      {(claims) => {
+        const waiting = claims.filter((c) => isAwaitingPayment(c) || c.status === 'pending_review');
+        const paid = claims.filter((c) => c.status === 'paid');
+        const overdue = claims.filter((c) => isOverdue(c, today));
+        const shown = claims.filter((c) => filter === 'all' || (filter === 'waiting' ? waiting.includes(c) : filter === 'paid' ? c.status === 'paid' : c.status === 'rejected'));
+        const avgDays = paid.length ? paid.reduce((s, c) => s + claimAgeDays(c, today), 0) / paid.length : 0;
+        return (
+          <div className="stack">
+            <div className="grid four tight">
+              <Stat label="Awaiting payment" value={naira(waiting.reduce((s, c) => s + c.approvedTotal, 0))} hint={`${waiting.length} claims`} />
+              <Stat label="Paid" value={naira(paid.reduce((s, c) => s + c.approvedTotal, 0))} hint={`${paid.length} claims`} tone="green" />
+              <Stat label="Average time to payment" value={`${avgDays.toFixed(1)} days`} />
+              <Stat label="Overdue (past target)" value={overdue.length} tone={overdue.length ? 'red' : undefined} hint="Visible to the regulator" />
+            </div>
+            <Tabs
+              value={filter}
+              onChange={setFilter}
+              tabs={[
+                ['all', 'All'],
+                ['waiting', 'Waiting'],
+                ['paid', 'Paid'],
+                ['rejected', 'Rejected'],
+              ]}
+            />
+            {shown.length === 0 ? (
+              <Empty>No claims here.</Empty>
+            ) : (
+              <div className="table-wrap card flush">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Claim</th>
+                      <th>Patient</th>
+                      <th>Visit</th>
+                      <th>Billed</th>
+                      <th>Approved</th>
+                      <th>Status</th>
+                      <th>Age</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shown.slice(0, 80).map((c) => (
+                      <tr key={c.id}>
+                        <td className="mono">{c.id}</td>
+                        <td>{c.patientName}</td>
+                        <td>{prettyDate(c.encounterDate)}</td>
+                        <td>{naira(c.billedTotal)}</td>
+                        <td>{naira(c.approvedTotal)}</td>
+                        <td>
+                          <ClaimBadge claim={c} />
+                        </td>
+                        <td>
+                          {claimAgeDays(c, today)}d {isOverdue(c, today) && <Badge tone="red">Overdue</Badge>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      }}
+    </Loadable>
   );
 }
 
-function Capitation({ providerId }: { providerId: string }) {
-  const { db, today } = useStore();
-  const provider = providerById(providerId)!;
-  const rows = db.capitation.filter((c) => c.providerId === providerId).sort((a, b) => b.month.localeCompare(a.month));
-  const thisMonth = today.slice(0, 7);
-  if (provider.level !== 'primary')
+function Capitation({ level }: { level: string }) {
+  const meta = useMeta();
+  const thisMonth = (meta.data?.today ?? new Date().toISOString()).slice(0, 7);
+  const q = useApiQuery<CapitationPayment[]>(['provider', 'capitation'], level === 'primary' ? '/provider/capitation' : null);
+  if (level !== 'primary')
     return (
       <Card>
         <Empty>Capitation is paid to primary providers. Secondary and tertiary hospitals are paid fee-for-service through claims.</Empty>
@@ -507,43 +520,39 @@ function Capitation({ providerId }: { providerId: string }) {
     );
   return (
     <Card title="Capitation — a fixed monthly payment per registered member">
-      <p className="muted small">Paid in advance so you can stock drugs and staff the clinic. Late capitation is tracked and visible to the regulator.</p>
-      {rows.length === 0 ? (
-        <Empty>No members registered here yet.</Empty>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Month</th>
-                <th>HMO</th>
-                <th>Lives</th>
-                <th>Amount</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((c) => (
-                <tr key={c.id}>
-                  <td>{c.month}</td>
-                  <td>{hmoById(c.hmoId).name}</td>
-                  <td>{c.lives}</td>
-                  <td>{naira(c.amount)}</td>
-                  <td>
-                    {c.paidAt ? (
-                      <Badge tone="green">Paid {prettyDate(c.paidAt)}</Badge>
-                    ) : c.month < thisMonth ? (
-                      <Badge tone="red">Overdue</Badge>
-                    ) : (
-                      <Badge tone="amber">Due</Badge>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <p className="muted small">Paid in advance so you can stock drugs and staff the clinic. Late capitation is visible to the regulator.</p>
+      <Loadable q={q}>
+        {(rows) =>
+          rows.length === 0 ? (
+            <Empty>No members registered here yet.</Empty>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>HMO</th>
+                    <th>Lives</th>
+                    <th>Amount</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((c) => (
+                    <tr key={c.id}>
+                      <td>{c.month}</td>
+                      <td>{hmoById(c.hmoId).name}</td>
+                      <td>{c.lives}</td>
+                      <td>{naira(c.amount)}</td>
+                      <td>{c.paidAt ? <Badge tone="green">Paid {prettyDate(c.paidAt)}</Badge> : c.month < thisMonth ? <Badge tone="red">Overdue</Badge> : <Badge tone="amber">Due</Badge>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
+      </Loadable>
     </Card>
   );
 }

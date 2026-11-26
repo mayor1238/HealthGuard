@@ -18,6 +18,8 @@ export interface Config {
   /** Optional shared secret the USSD aggregator must send as ?key=… */
   ussdSecret: string;
   corsOrigins: string[];
+  /** Folder with the built frontend to serve at /. Empty = API only. */
+  staticDir: string;
   /** Per-IP rate limits on login, enrolment and USSD. Off in tests. */
   rateLimits: boolean;
   /** Load the demo population and demo logins on an empty database. */
@@ -47,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     paymentWebhookSecret: required('PAYMENT_WEBHOOK_SECRET', 'dev-webhook-secret'),
     ussdSecret: env.USSD_SECRET ?? '',
     corsOrigins: (env.CORS_ORIGINS ?? 'http://localhost:5173,http://localhost:4173').split(',').map((s) => s.trim()).filter(Boolean),
+    staticDir: env.STATIC_DIR ?? '',
     rateLimits: mode !== 'test',
     seedDemo: env.SEED_DEMO ? env.SEED_DEMO === 'true' : !prod,
     now: () => new Date(),

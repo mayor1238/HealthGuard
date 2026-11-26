@@ -13,12 +13,15 @@
     "server:build": "esbuild server/index.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist-server/index.js && esbuild server/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist-server/cli.js",
     "server:start": "node dist-server/index.js",
     "db:migrate": "tsx server/cli.ts migrate",
-    "db:seed": "tsx server/cli.ts seed"
+    "db:seed": "tsx server/cli.ts seed",
+    "dev:all": "concurrently -k -n api,web -c green,cyan \"npm:server:dev\" \"npm:dev\""
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.6.0",
     "@fastify/cors": "^11.4.3",
     "@fastify/rate-limit": "^11.3.0",
+    "@fastify/static": "^11.0.0",
+    "@tanstack/react-query": "^5.108.4",
     "fastify": "^5.12.8",
     "jose": "^6.2.18",
     "lucide-react": "0.577.0",
@@ -34,6 +37,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "5.2.0",
+    "concurrently": "^10.0.7",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "5.9.3",

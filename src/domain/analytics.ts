@@ -1,7 +1,13 @@
 import { HMOS, STATES, hmoById } from './catalog';
 import { checkEligibility } from './pricing';
-import type { Claim, Db } from './types';
+import type { Claim, Db, Enrollee } from './types';
 import { daysBetween } from './util';
+
+/** Lapsed or never-paid members don't count as covered (and earn clinics no capitation). */
+export const hasCover = (e: Enrollee, today: string) => {
+  const s = checkEligibility(e, today).status;
+  return s !== 'lapsed' && s !== 'unpaid';
+};
 
 export const isSettled = (c: Claim) => c.status === 'paid';
 export const isAwaitingPayment = (c: Claim) => c.status === 'approved' || c.status === 'partially_approved';
@@ -53,7 +59,7 @@ export function hmoScorecard(db: Db, today: string): HmoScore[] {
       hmoId: h.id,
       name: h.name,
       enrollees: enrollees.length,
-      activeEnrollees: enrollees.filter((e) => checkEligibility(e, today).status !== 'lapsed').length,
+      activeEnrollees: enrollees.filter((e) => hasCover(e, today)).length,
       premiums,
       claimsPaid,
       capitationPaid,
@@ -75,7 +81,7 @@ export function systemSummary(db: Db, today: string) {
   for (const e of db.enrollees) {
     bySector[e.sector]++;
     byState[e.state] = (byState[e.state] ?? 0) + 1;
-    if (checkEligibility(e, today).status !== 'lapsed') active++;
+    if (hasCover(e, today)) active++;
   }
   const livesCovered = db.enrollees.reduce((s, e) => s + 1 + e.dependants, 0);
   const flagged = db.claims.filter((c) => c.fraudFlags.length > 0);
@@ -106,7 +112,7 @@ export function systemSummary(db: Db, today: string) {
 /** Capitation due to a primary provider for a month: lives registered with it × plan rate. */
 export function capitationDue(db: Db, providerId: string, hmoId: string, rates: Record<string, number>, today: string) {
   const lives = db.enrollees.filter(
-    (e) => e.primaryProviderId === providerId && e.hmoId === hmoId && checkEligibility(e, today).status !== 'lapsed',
+    (e) => e.primaryProviderId === providerId && e.hmoId === hmoId && hasCover(e, today),
   );
   return {
     lives: lives.reduce((s, e) => s + 1 + e.dependants, 0),
